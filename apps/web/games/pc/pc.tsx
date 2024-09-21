@@ -1,49 +1,64 @@
-'use client';
-
-import { useContext, useEffect, useState } from 'react';
-import { UInt64, PublicKey } from 'o1js';
-import { useNetworkStore } from '@/lib/stores/network';
-import { useSessionKeyStore } from '@/lib/stores/sessionKeyStorage';
-import { useStore } from 'zustand';
-import GamePage from '@/components/framework/GamePage';
+import { useState,useEffect, useContext} from 'react'; 
+import React from 'react';
+import { 
+  usePowerClashMatchQueueStore,
+  useObservePowerClashMatchQueue 
+} from './stores/matchQueue';
 import ZkNoidGameContext from '@/lib/contexts/ZkNoidGameContext';
-import { powerclashConfig } from './config';
 import { useProtokitChainStore } from '@/lib/stores/protokitChain';
-import { MainButtonState } from '@/components/framework/GamePage/PvPGameView';
-import { api } from '@/trpc/react';
-import { getEnvContext } from '@/lib/envContext';
-import GameWidget from '@/components/framework/GameWidget';
-import { motion } from 'framer-motion';
-import { formatPubkey } from '@/lib/utils';
+import { ClientAppChain, PENDING_BLOCKS_NUM_CONST, PowerClash } from 'zknoid-chain-dev';
+import { powerclashConfig } from './config';
+import { useStore } from 'zustand';
+import { useSessionKeyStore } from '@/lib/stores/sessionKeyStorage';
+import GamePage from '@/components/framework/GamePage';
+import RandzuCoverSVG from '../randzu/assets/game-cover.svg';
+import RandzuCoverMobileSVG from '../randzu/assets/game-cover-mobile.svg';
 import Button from '@/components/shared/Button';
-import { Currency } from '@/constants/currency';
-import { formatUnits } from '@/lib/unit';
-import { walletInstalled } from '@/lib/helpers';
-import { GameWrap } from '@/components/framework/GamePage/GameWrap';
-import toast from '@/components/shared/Toast';
-import { useToasterStore } from '@/lib/stores/toasterStore';
+import Image from 'next/image';
+import { Bool, CircuitString, Field, Poseidon, UInt64 , Int64, PublicKey, UInt32} from 'o1js';
+import { useNetworkStore } from '@/lib/stores/network';
+import { useNotificationStore } from '@/components/shared/Notification/lib/notificationStore';
 import { useRateGameStore } from '@/lib/stores/rateGameStore';
-import { ClientAppChain } from 'zknoid-chain-dev';
-
-const ROUNDS_TO_WIN = 2; // Best of 3
-const MOVE_TIME_LIMIT = 50; // Assuming 5-second block time, this gives ~4 minutes per move
+import { useStartGame } from './features/startGame';
+import { DEFAULT_PARTICIPATION_FEE } from 'zknoid-chain-dev/dist/src/engine/LobbyManager';
+import { useLobbiesStore, useObserveLobbiesStore } from '@/lib/stores/lobbiesStore';
+import { api } from '@/trpc/react';
+import { GameWrap } from '@/components/framework/GamePage/GameWrap';
+import { Win } from '@/components/framework/GameWidget/ui/popups/Win';
+import { Lost } from '@/components/framework/GameWidget/ui/popups/Lost';
 
 enum GameState {
-  NotStarted,
   WalletNotInstalled,
   WalletNotConnected,
+  NotStarted,
   MatchRegistration,
   Matchmaking,
-  CommitPhase,
-  RevealPhase,
+  CurrentPlayerTurn,
+  OpponentTurn,
   OpponentTimeout,
-  GameEnded,
+  Won,
+  Active,
+  Lost,
+  WaitingForOpponent,
+  Commitment,
+  Reveal,
+  RoundEnd,
+  GameEnd
 }
 
-export default function pc() {
-  const [gameState, setGameState] = useState(GameState.NotStarted);
+const moves = ['Rock', 'Paper', 'Scissors', 'Lizard', 'Spock'];
+
+const pc: React.FC = () => {
+  const [gameState, setGameState] = useState<GameState>(GameState.NotStarted);
+  const [finalState, setFinalState] = useState<GameState>(GameState.Active);
   const [isRateGame, setIsRateGame] = useState<boolean>(true);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [selectedMove, setSelectedMove] = useState<string | null>(null);
+  const [commitment, setCommitment] = useState<Field | null>(null);
+  const [salt, setSalt] = useState<Field | null>(null);
+  const [opponentMove, setOpponentMove] = useState<string | null>(null);
+  const [roundWinner, setRoundWinner] = useState<PublicKey | null>(null);
+  const [gameWinner, setGameWinner] = useState<PublicKey | null>(null);
   const { client } = useContext(ZkNoidGameContext);
 
   if (!client) {
@@ -51,18 +66,13 @@ export default function pc() {
   }
 
   const networkStore = useNetworkStore();
-  const toasterStore = useToasterStore();
-  const rateGameStore = useRateGameStore();
+  const notificationStore = useNotificationStore();
   const protokitChain = useProtokitChainStore();
-  const sessionPrivateKey = useStore(useSessionKeyStore, (state) =>
-    state.getSessionKey()
-  );
-  const progress = api.progress.setSolvedQuests.useMutation();
 
-  const [gameInfo, setGameInfo] = useState<any>(null);
-  const [opponent, setOpponent] = useState<string | null>(null);
+  useObservePowerClashMatchQueue();
+  const matchQueue = usePowerClashMatchQueueStore();
 
-  const clientAppChain = client as ClientAppChain<
+  const client_ = client as ClientAppChain<
     typeof powerclashConfig.runtimeModules,
     any,
     any,
@@ -70,194 +80,245 @@ export default function pc() {
   >;
 
   const query = networkStore.protokitClientStarted
-    ? clientAppChain.query.runtime.PowerClash
+    ? client_.query.runtime.PowerClash
     : undefined;
 
+  useObserveLobbiesStore(query);
+  const lobbiesStore = useLobbiesStore();
 
-  useEffect(() => {
-    if (!walletInstalled()) {
-      setGameState(GameState.WalletNotInstalled);
-    } else if (!networkStore.address) {
-      setGameState(GameState.WalletNotConnected);
-    } else {
-      setGameState(GameState.NotStarted);
-    }
-  }, [networkStore.address]);
-
-  const startGame = async () => {
-    setLoading(true);
-    // Implement game start logic here
-    setLoading(false);
-    setGameState(GameState.Matchmaking);
-  };
-
-  const commitMove = async (move: number) => {
-    setLoading(true);
-    // Implement move commitment logic here
-    setLoading(false);
-    setGameState(GameState.RevealPhase);
-  };
-
-  const revealMove = async () => {
-    setLoading(true);
-    // Implement move reveal logic here
-    setLoading(false);
-    // Update game state based on the result
-  };
-
-  const proveOpponentTimeout = async () => {
-    setLoading(true);
-    // Implement timeout proving logic here
-    setLoading(false);
-    setGameState(GameState.GameEnded);
-  };
+  console.log('Active lobby', lobbiesStore.activeLobby);
 
   const restart = () => {
-    setGameInfo(null);
-    setOpponent(null);
+    matchQueue.resetLastGameState();
     setGameState(GameState.NotStarted);
   };
 
-  const mainButtonState = loading
-    ? MainButtonState.TransactionExecution
-    : (() => {
-        switch (gameState) {
-          case GameState.CommitPhase:
-            return MainButtonState.YourTurn;
-          case GameState.RevealPhase:
-            return MainButtonState.OpponentsTurn;
-          case GameState.OpponentTimeout:
-            return MainButtonState.OpponentTimeOut;
-          case GameState.NotStarted:
-            return MainButtonState.NotStarted;
-          case GameState.WalletNotInstalled:
-            return MainButtonState.WalletNotInstalled;
-          case GameState.WalletNotConnected:
-            return MainButtonState.WalletNotConnected;
-          default:
-            return MainButtonState.None;
-        }
-      })();
+  const sessionPrivateKey = useStore(useSessionKeyStore, (state) =>
+    state.getSessionKey()
+  );
 
-  const statuses = {
-    [GameState.WalletNotInstalled]: 'WALLET NOT INSTALLED',
-    [GameState.WalletNotConnected]: 'WALLET NOT CONNECTED',
-    [GameState.NotStarted]: 'NOT STARTED',
-    [GameState.MatchRegistration]: 'MATCH REGISTRATION',
-    [GameState.Matchmaking]: 'MATCHMAKING',
-    [GameState.CommitPhase]: 'COMMIT PHASE',
-    [GameState.RevealPhase]: 'REVEAL PHASE',
-    [GameState.OpponentTimeout]: 'OPPONENT TIMEOUT',
-    [GameState.GameEnded]: 'GAME ENDED',
+  useEffect(() => {
+    if (matchQueue.activeGameId && Number(matchQueue.activeGameId) !== 0) {
+      setGameState(GameState.Commitment);
+    }
+  }, [matchQueue.activeGameId]);
+
+  const makeMove = async (move: string) => {
+    if (!query || !matchQueue.activeGameId) {
+      notificationStore.create({
+        type: 'error',
+        message: 'Game not initialized or query not available.',
+      });
+      return;
+    }
+
+    const moveIndex = moves.indexOf(move);
+    if (moveIndex === -1) {
+      notificationStore.create({
+        type: 'error',
+        message: 'Invalid move selected.',
+      });
+      return;
+    }
+
+    const newSalt = Field.random();
+    const newCommitment = Poseidon.hash([Field(moveIndex), newSalt]);
+
+    setSelectedMove(move);
+    setCommitment(newCommitment);
+    setSalt(newSalt);
+
+    const PowerClash = client.runtime.resolve('PowerClash');
+
+    try {
+      const tx = await client!.transaction(
+        sessionPrivateKey.toPublicKey(), 
+        async () => {
+          PowerClash.commitMove(
+          UInt64.from(matchQueue.activeGameId!),
+          newCommitment
+        );
+      });
+
+      setLoading(true);
+
+      tx.transaction = tx.transaction?.sign(sessionPrivateKey);
+      await tx.send();
+    
+      notificationStore.create({
+        type: 'success',
+        message: 'Your move has been committed to the blockchain.',
+      });
+      setGameState(GameState.Commitment);
+    } catch (error) {
+      console.error('Error committing move:', error);
+      notificationStore.create({
+        type: 'error',
+        message: 'Failed to commit move. Please try again.',
+      });
+    }
   };
 
+  const revealMove = async () => {
+    if (!query || !matchQueue.activeGameId || !selectedMove || salt === null) {
+      notificationStore.create({
+        type: 'error',
+        message: 'Cannot reveal move. Missing information.',
+      });
+      return;
+    }
+
+    const moveIndex = moves.indexOf(selectedMove);
+    const PowerClash = client.runtime.resolve('PowerClash');
+
+    try {
+      const tx = await client!.transaction(
+        sessionPrivateKey.toPublicKey(), 
+        async () => {
+          PowerClash.revealMove(
+            UInt64.from(matchQueue.activeGameId!),
+            {
+              move: Field(moveIndex),
+              salt: salt
+            }
+          );
+        }
+      );
+
+      tx.transaction = tx.transaction?.sign(sessionPrivateKey);
+      const result = await tx.send();
+
+      // Extract the round winner from the transaction result
+      // const revealMoveResult = result.events.find(event => event.type === 'revealMove');
+      const revealMoveResult = await PowerClash.revealMove.get(
+        PublicKey.fromBase58(sessionPrivateKey.toPublicKey().toBase58())
+      )
+      console.log('win win win winw iwnniw', revealMoveResult);
+      if (revealMoveResult) {
+        const { roundWinner } = revealMoveResult.event as { roundWinner: PublicKey | null };
+        setRoundWinner(roundWinner);
+        if (roundWinner) {
+          notificationStore.create({
+            type: 'success',
+            message: `Round winner: ${roundWinner.equals(sessionPrivateKey.toPublicKey()) ? 'You' : 'Opponent'}`,
+          });
+        } else {
+          notificationStore.create({
+            type: 'message',
+            message: 'Round ended in a tie.',
+          });
+        }
+      }
+
+      setGameState(GameState.RoundEnd);
+    } catch (error) {
+      console.error('Error revealing move:', error);
+      notificationStore.create({
+        type: 'error',
+        message: 'Failed to reveal move. Please try again.',
+      });
+    }
+  };
+
+
+  useEffect(() => {
+    if (matchQueue.activeGameId && Number(matchQueue.activeGameId) !== 0) {
+      setGameState(GameState.Commitment);
+    }
+  }, [matchQueue.activeGameId]);
+  
   return (
     <GamePage
       gameConfig={powerclashConfig}
-      image={'/path-to-power-clash-image.svg'}
-      mobileImage={'/path-to-power-clash-mobile-image.svg'}
+      image={RandzuCoverSVG}
+      mobileImage={RandzuCoverMobileSVG}
       defaultPage={'Game'}
     >
-      <motion.div
-        className={'flex grid-cols-4 flex-col-reverse gap-4 pt-10 lg:grid lg:pt-0'}
-        animate={'windowed'}
-      >
-        <div className={'flex flex-col gap-4 lg:hidden'}>
-          <span className={'w-full text-headline-2 font-bold'}>Rules</span>
-          <span className={'font-plexsans text-buttons-menu font-normal'}>
-            {powerclashConfig.rules}
-          </span>
-        </div>
-        <div className={'hidden h-full w-full flex-col gap-4 lg:flex'}>
-          <div className={'flex w-full gap-2 font-plexsans text-[20px]/[20px] uppercase text-left-accent'}>
-            <span>Game status:</span>
-            <span>{statuses[gameState]}</span>
+      <div className="flex">
+        <div className="w-2/3 bg-gray-900 p-8">
+          <div className="flex justify-between items-center mb-8">
+            <div className="text-2xl font-bold">You: {matchQueue.gameInfo?.player1Wins.toString() || '0'}</div>
+            <div className="text-3xl font-bold">Round: {(Number(matchQueue.gameInfo?.player1Wins || 0) + Number(matchQueue.gameInfo?.player2Wins || 0) + 1).toString()}</div>
+            <div className="text-2xl font-bold">Opponent: {matchQueue.gameInfo?.player2Wins.toString() || '0'}</div>
           </div>
-          <div className={'flex w-full gap-2 font-plexsans text-[20px]/[20px] text-foreground'}>
-            <span>Your opponent:</span>
-            {/* <span>{formatPubkey(opponent)}</span> */}
+
+          <div className="flex justify-around items-center mb-12">
+            <div className="text-center">
+              <h2 className="text-xl font-semibold mb-2">Your Move</h2>
+              <div className="text-3xl h-20 flex items-center justify-center">
+                {selectedMove || '?'}
+              </div>
+            </div>
+            <div className="text-4xl font-bold">VS</div>
+            <div className="text-center">
+              <h2 className="text-xl font-semibold mb-2">Opponent's Move</h2>
+              <div className="text-3xl h-20 flex items-center justify-center">
+                {opponentMove || '?'}
+              </div>
+            </div>
           </div>
-          {mainButtonState === MainButtonState.YourTurn && (
-            <Button
-              startContent={<svg>...</svg>}
-              label={'YOUR TURN'}
-              isReadonly
-            />
+
+          <div className="grid grid-cols-5 gap-4 mb-8">
+            {moves.map((move) => (
+              <Button
+                key={move}
+                onClick={() => makeMove(move)}
+                disabled={gameState !== GameState.Commitment || selectedMove !== null}
+                className={`p-16 rounded-lg text-3xl font-semibold transition-colors ${
+                  selectedMove === move
+                    ? 'bg-blue-600 hover:bg-blue-700'
+                    : 'bg-gray-700 hover:bg-gray-600'
+                }`}
+                label={move}
+              />
+            ))}
+          </div>
+
+          {gameState === GameState.RoundEnd && (
+            <div className="text-center text-4xl font-bold mt-8">
+              Round Ended!
+              {roundWinner && (
+                <div className="text-2xl mt-4">
+                  Round Winner: {roundWinner.equals(sessionPrivateKey.toPublicKey()) ? 'You' : 'Opponent'}
+                </div>
+              )}
+              {!roundWinner && (
+                <div className="text-2xl mt-4">
+                  This round was a tie!
+                </div>
+              )}
+            </div>
           )}
-          {mainButtonState === MainButtonState.OpponentsTurn && (
-            <Button
-              startContent={<svg>...</svg>}
-              label={"OPPONENT'S TURN"}
-              isReadonly
-            />
+
+          {gameState === GameState.GameEnd && (
+            <div className="text-center text-4xl font-bold mt-8">
+              Game Over!
+              {gameWinner && (
+                <div className="text-2xl mt-4">
+                  Game Winner: {gameWinner.equals(sessionPrivateKey.toPublicKey()) ? 'You' : 'Opponent'}
+                </div>
+              )}
+            </div>
           )}
-          {mainButtonState === MainButtonState.OpponentTimeOut && (
-            <Button label={'OPPONENT TIMED OUT'} isReadonly />
-          )}
-          {mainButtonState === MainButtonState.TransactionExecution && (
+
+          {gameState === GameState.Reveal && (
             <Button
-              startContent={<svg>...</svg>}
-              label={'TRANSACTION EXECUTION'}
-              isReadonly
+              onClick={revealMove}
+              className="mt-8 p-4 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded"
+              label="Reveal Move"
             />
           )}
         </div>
-        <GameWidget
-          author={powerclashConfig.author}
-          isPvp
-          playersCount={2}
-          gameId="power-clash"
-        >
-          {networkStore.address ? (
-            <>
-              {gameState === GameState.NotStarted && (
-                <GameWrap>
-                  <Button
-                    label={`START GAME`}
-                    onClick={startGame}
-                    className={'max-w-[40%]'}
-                  />
-                </GameWrap>
-              )}
-              {gameState === GameState.OpponentTimeout && (
-                <GameWrap>
-                  <Button
-                    label={'Prove Opponent Timeout'}
-                    onClick={proveOpponentTimeout}
-                    className={'px-4'}
-                  />
-                </GameWrap>
-              )}
-              {gameState === GameState.GameEnded && (
-                <GameWrap>
-                  <Button
-                    label={'Start New Game'}
-                    onClick={restart}
-                    className={'px-4'}
-                  />
-                </GameWrap>
-              )}
-            </>
-          ) : walletInstalled() ? (
-            <GameWrap>
-              <Button
-                label={'Connect Wallet'}
-                onClick={() => networkStore.connectWallet(false)}
-                className={'px-4'}
-              />
-            </GameWrap>
-          ) : (
-            <GameWrap>
-              <Button
-                label={'Install Wallet'}
-                onClick={() => window.open('https://www.aurowallet.com/', '_blank')}
-                className={'px-4'}
-              />
-            </GameWrap>
-          )}
-        </GameWidget>
-        {/* Add more UI components as needed */}
-      </motion.div>
+
+        <div className="w-1/3 bg-black text-left-accent p-8 text-lg">
+          <h2 className="text-2xl font-bold mb-4">Game Rules</h2>
+          <ul className="list-disc pl-5 space-y-2">
+            <li>Rock crushes Scissors and Lizard</li>
+          </ul>
+        </div>
+      </div>
     </GamePage>
   );
-}
+};
+
+export default pc;

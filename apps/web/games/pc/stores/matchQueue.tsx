@@ -6,6 +6,7 @@ import ZkNoidGameContext from '@/lib/contexts/ZkNoidGameContext';
 import { powerclashConfig } from '../config';
 import { type ClientAppChain } from '@proto-kit/sdk';
 import { create } from 'zustand';
+import { RoundIdxUser } from 'zknoid-chain-dev';
 import { immer } from 'zustand/middleware/immer';
 import { type ModuleQuery } from '@proto-kit/sequencer';
 import { PowerClash, MatchMaker, PENDING_BLOCKS_NUM_CONST } from 'zknoid-chain-dev';
