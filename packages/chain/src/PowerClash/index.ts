@@ -1,3 +1,3 @@
-import { PowerClash } from "./PowerClashLogic";
+import { PowerClash , Game , RPSLSMove  } from './PowerClashLogic';
 
-export { PowerClash };
+export { PowerClash , Game, RPSLSMove };
