@@ -1,12 +1,11 @@
-import { useState,useEffect, useContext} from 'react'; 
-import React from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { 
   usePowerClashMatchQueueStore,
   useObservePowerClashMatchQueue 
 } from './stores/matchQueue';
 import ZkNoidGameContext from '@/lib/contexts/ZkNoidGameContext';
 import { useProtokitChainStore } from '@/lib/stores/protokitChain';
-import { ClientAppChain, PENDING_BLOCKS_NUM_CONST, PowerClash } from 'zknoid-chain-dev';
+import { ClientAppChain } from 'zknoid-chain-dev';
 import { powerclashConfig } from './config';
 import { useStore } from 'zustand';
 import { useSessionKeyStore } from '@/lib/stores/sessionKeyStorage';
@@ -14,32 +13,13 @@ import GamePage from '@/components/framework/GamePage';
 import RandzuCoverSVG from '../randzu/assets/game-cover.svg';
 import RandzuCoverMobileSVG from '../randzu/assets/game-cover-mobile.svg';
 import Button from '@/components/shared/Button';
-import Image from 'next/image';
-import { Bool, CircuitString, Field, Poseidon, UInt64 , Int64, PublicKey, UInt32} from 'o1js';
+import { Field, Poseidon, UInt64, PublicKey } from 'o1js';
 import { useNetworkStore } from '@/lib/stores/network';
 import { useNotificationStore } from '@/components/shared/Notification/lib/notificationStore';
-import { useRateGameStore } from '@/lib/stores/rateGameStore';
-import { useStartGame } from './features/startGame';
-import { DEFAULT_PARTICIPATION_FEE } from 'zknoid-chain-dev/dist/src/engine/LobbyManager';
 import { useLobbiesStore, useObserveLobbiesStore } from '@/lib/stores/lobbiesStore';
-import { api } from '@/trpc/react';
-import { GameWrap } from '@/components/framework/GamePage/GameWrap';
-import { Win } from '@/components/framework/GameWidget/ui/popups/Win';
-import { Lost } from '@/components/framework/GameWidget/ui/popups/Lost';
 
 enum GameState {
-  WalletNotInstalled,
-  WalletNotConnected,
   NotStarted,
-  MatchRegistration,
-  Matchmaking,
-  CurrentPlayerTurn,
-  OpponentTurn,
-  OpponentTimeout,
-  Won,
-  Active,
-  Lost,
-  WaitingForOpponent,
   Commitment,
   Reveal,
   RoundEnd,
@@ -48,19 +28,20 @@ enum GameState {
 
 const moves = ['Rock', 'Paper', 'Scissors', 'Lizard', 'Spock'];
 
-const pc: React.FC = () => {
+const PowerClash: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(GameState.NotStarted);
-  const [finalState, setFinalState] = useState<GameState>(GameState.Active);
-  const [isRateGame, setIsRateGame] = useState<boolean>(true);
-  const [loading, setLoading] = useState(true);
   const [selectedMove, setSelectedMove] = useState<string | null>(null);
   const [commitment, setCommitment] = useState<Field | null>(null);
   const [salt, setSalt] = useState<Field | null>(null);
   const [opponentMove, setOpponentMove] = useState<string | null>(null);
   const [roundWinner, setRoundWinner] = useState<PublicKey | null>(null);
   const [gameWinner, setGameWinner] = useState<PublicKey | null>(null);
-  const { client } = useContext(ZkNoidGameContext);
+  const [roundNumber, setRoundNumber] = useState(1);
+  const [playerScore, setPlayerScore] = useState(0);
+  const [opponentScore, setOpponentScore] = useState(0);
+  const [bothPlayersCommitted, setBothPlayersCommitted] = useState(false);
 
+  const { client } = useContext(ZkNoidGameContext);
   if (!client) {
     throw Error('Context app chain client is not set');
   }
@@ -86,13 +67,6 @@ const pc: React.FC = () => {
   useObserveLobbiesStore(query);
   const lobbiesStore = useLobbiesStore();
 
-  console.log('Active lobby', lobbiesStore.activeLobby);
-
-  const restart = () => {
-    matchQueue.resetLastGameState();
-    setGameState(GameState.NotStarted);
-  };
-
   const sessionPrivateKey = useStore(useSessionKeyStore, (state) =>
     state.getSessionKey()
   );
@@ -103,7 +77,7 @@ const pc: React.FC = () => {
     }
   }, [matchQueue.activeGameId]);
 
-  const makeMove = async (move: string) => {
+  const makeMove = useCallback(async (move: string) => {
     if (!query || !matchQueue.activeGameId) {
       notificationStore.create({
         type: 'error',
@@ -135,12 +109,11 @@ const pc: React.FC = () => {
         sessionPrivateKey.toPublicKey(), 
         async () => {
           PowerClash.commitMove(
-          UInt64.from(matchQueue.activeGameId!),
-          newCommitment
-        );
-      });
-
-      setLoading(true);
+            UInt64.from(matchQueue.activeGameId!),
+            newCommitment
+          );
+        }
+      );
 
       tx.transaction = tx.transaction?.sign(sessionPrivateKey);
       await tx.send();
@@ -157,9 +130,9 @@ const pc: React.FC = () => {
         message: 'Failed to commit move. Please try again.',
       });
     }
-  };
+  }, [query, matchQueue.activeGameId, client, sessionPrivateKey, notificationStore]);
 
-  const revealMove = async () => {
+  const revealMove = useCallback(async () => {
     if (!query || !matchQueue.activeGameId || !selectedMove || salt === null) {
       notificationStore.create({
         type: 'error',
@@ -186,18 +159,21 @@ const pc: React.FC = () => {
       );
 
       tx.transaction = tx.transaction?.sign(sessionPrivateKey);
-      const result = await tx.send();
+      await tx.send();
 
-      // Extract the round winner from the transaction result
-      // const revealMoveResult = result.events.find(event => event.type === 'revealMove');
       const revealMoveResult = await PowerClash.revealMove.get(
         PublicKey.fromBase58(sessionPrivateKey.toPublicKey().toBase58())
       )
-      console.log('win win win winw iwnniw', revealMoveResult);
+      console.log('Reveal move result:', revealMoveResult);
       if (revealMoveResult) {
         const { roundWinner } = revealMoveResult.event as { roundWinner: PublicKey | null };
         setRoundWinner(roundWinner);
         if (roundWinner) {
+          if (roundWinner.equals(sessionPrivateKey.toPublicKey())) {
+            setPlayerScore(prevScore => prevScore + 1);
+          } else {
+            setOpponentScore(prevScore => prevScore + 1);
+          }
           notificationStore.create({
             type: 'success',
             message: `Round winner: ${roundWinner.equals(sessionPrivateKey.toPublicKey()) ? 'You' : 'Opponent'}`,
@@ -218,7 +194,7 @@ const pc: React.FC = () => {
         message: 'Failed to reveal move. Please try again.',
       });
     }
-  };  
+  }, [query, matchQueue.activeGameId, selectedMove, salt, client, sessionPrivateKey, notificationStore]);  
 
   type GameStateType = {
     player1Move: { move: Field };
@@ -226,48 +202,71 @@ const pc: React.FC = () => {
     gameWinner: PublicKey;
   };
   
-  const fetchGameState = async () => {
-      if (!query || !matchQueue.activeGameId) return;
-      const PowerClash = client.runtime.resolve('PowerClash');
-      try {
-        const gameState = await client.query.runtime.PowerClash.games.get(UInt64.from(matchQueue.activeGameId)) as GameStateType;
-        console.log('game game ', gameState);
-        // const gameState = await PowerClash.get(UInt64.from(matchQueue.activeGameId));
-        console.log("gameState: ", gameState)
-        if (gameState) {
-          if (gameState.player1Move.move !== Field(-1) && gameState.player2Move.move !== Field(-1)) {
-            setOpponentMove(moves[Number(gameState.player2Move.move.toString())]);
-            setGameState(GameState.RoundEnd);
-          } else if (commitment && !gameState.player1Move.move.equals(Field(-1))) {
-            setGameState(GameState.Reveal);
-          }
-  
-          if (!gameState.gameWinner.equals(PublicKey.empty())) {
-            setGameWinner(gameState.gameWinner);
-            setGameState(GameState.GameEnd);
-          }
+  const fetchGameState = useCallback(async () => {
+    if (!query || !matchQueue.activeGameId) return;
+    const PowerClash = client.runtime.resolve('PowerClash');
+    try {
+      const gameState = await client.query.runtime.PowerClash.games.get(UInt64.from(matchQueue.activeGameId)) as GameStateType;
+      console.log('Current game state:', gameState);
+      if (gameState) {
+        const bothMoved = !gameState.player1Move.move.equals(Field(-1)) && !gameState.player2Move.move.equals(Field(-1));
+        setBothPlayersCommitted(bothMoved);
+
+        if (bothMoved) {
+          setOpponentMove(moves[Number(gameState.player2Move.move.toString())]);
+          setGameState(GameState.Reveal);
+        } else if (commitment && !gameState.player1Move.move.equals(Field(-1))) {
+          setGameState(GameState.Commitment);
         }
-      } catch (error) {
-        console.error('Error fetching game state:', error);
-        notificationStore.create({
-          type: 'error',
-          message: 'Failed to fetch game state. Please try again.',
-        });
+
+        if (!gameState.gameWinner.equals(PublicKey.empty())) {
+          setGameWinner(gameState.gameWinner);
+          setGameState(GameState.GameEnd);
+        }
       }
-    };
+    } catch (error) {
+      console.error('Error fetching game state:', error);
+      notificationStore.create({
+        type: 'error',
+        message: 'Failed to fetch game state. Please try again.',
+      });
+    }
+  }, [query, matchQueue.activeGameId, commitment, client, notificationStore]);
 
   useEffect(() => {
     fetchGameState();
     const interval = setInterval(fetchGameState, 5000); // Poll every 5 seconds
     return () => clearInterval(interval);
-  }, [query, matchQueue.activeGameId]);
+  }, [fetchGameState]);
 
   useEffect(() => {
-    if (matchQueue.activeGameId && Number(matchQueue.activeGameId) !== 0) {
-      setGameState(GameState.Commitment);
+    if (gameState === GameState.RoundEnd) {
+      if (roundWinner === null) {
+        // It's a draw, replay the same round
+        setTimeout(() => {
+          setGameState(GameState.Commitment);
+          setSelectedMove(null);
+          setOpponentMove(null);
+          setCommitment(null);
+          setSalt(null);
+          setBothPlayersCommitted(false);
+        }, 3000);
+      } else {
+        // Start next round
+        setTimeout(() => {
+          setRoundNumber(prevRound => prevRound + 1);
+          setGameState(GameState.Commitment);
+          setSelectedMove(null);
+          setOpponentMove(null);
+          setCommitment(null);
+          setSalt(null);
+          setRoundWinner(null);
+          setBothPlayersCommitted(false);
+        }, 3000);
+      }
     }
-  }, [matchQueue.activeGameId]);
-  
+  }, [gameState, roundWinner]);
+
   return (
     <GamePage
       gameConfig={powerclashConfig}
@@ -278,9 +277,9 @@ const pc: React.FC = () => {
       <div className="flex">
         <div className="w-2/3 bg-gray-900 p-8">
           <div className="flex justify-between items-center mb-8">
-            <div className="text-2xl font-bold">You: {matchQueue.gameInfo?.player1Wins.toString() || '0'}</div>
-            <div className="text-3xl font-bold">Round: {(Number(matchQueue.gameInfo?.player1Wins || 0) + Number(matchQueue.gameInfo?.player2Wins || 0) + 1).toString()}</div>
-            <div className="text-2xl font-bold">Opponent: {matchQueue.gameInfo?.player2Wins.toString() || '0'}</div>
+            <div className="text-2xl font-bold">You: {playerScore}</div>
+            <div className="text-3xl font-bold">Round: {roundNumber}</div>
+            <div className="text-2xl font-bold">Opponent: {opponentScore}</div>
           </div>
 
           <div className="flex justify-around items-center mb-12">
@@ -294,7 +293,7 @@ const pc: React.FC = () => {
             <div className="text-center">
               <h2 className="text-xl font-semibold mb-2">Opponent's Move</h2>
               <div className="text-3xl h-20 flex items-center justify-center">
-                {opponentMove || '?'}
+                {(bothPlayersCommitted && opponentMove) || '?'}
               </div>
             </div>
           </div>
@@ -325,7 +324,7 @@ const pc: React.FC = () => {
               )}
               {!roundWinner && (
                 <div className="text-2xl mt-4">
-                  This round was a tie!
+                  This round was a tie! Replaying the round...
                 </div>
               )}
             </div>
@@ -362,4 +361,4 @@ const pc: React.FC = () => {
   );
 };
 
-export default pc;
+export default PowerClash;
