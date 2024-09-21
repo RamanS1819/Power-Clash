@@ -1,97 +1,110 @@
-'use client';
-
-import { IGameInfo } from '@/lib/stores/matchQueue';
-import { RandzuField } from 'zknoid-chain-dev';
-import { useEffect, useRef, useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { PublicKey, Field } from 'o1js';
 
 interface IGameViewProps {
-  gameInfo: IGameInfo<RandzuField> | undefined;
-  onCellClicked: (x: number, y: number) => void;
-  loadingElement: { x: number; y: number } | undefined;
+  gameInfo: {
+    id: bigint;
+    player1: PublicKey;
+    player2: PublicKey;
+    player1Move: { move: Field; salt: Field } | null;
+    player2Move: { move: Field; salt: Field } | null;
+    player1Wins: number;
+    player2Wins: number;
+    gameWinner: PublicKey | null;
+  };
+  currentPlayer: PublicKey;
+  onMoveSelected: (move: number) => void;
   loading: boolean;
 }
 
-export const GameView = (props: IGameViewProps) => {
-  const fieldActive =
-    props.gameInfo?.isCurrentUserMove && !props.gameInfo?.winner;
-  const highlightCells = props.gameInfo?.isCurrentUserMove && !props.loading;
-  const displayBall = (i: number, j: number) =>
-    props.gameInfo?.isCurrentUserMove &&
-    !props.loading &&
-    +props.gameInfo?.field?.value?.[j]?.[i] == 0;
-  const isLoadingBall = (i: number, j: number) =>
-    props.loadingElement &&
-    props.loadingElement.x == i &&
-    props.loadingElement.y == j;
-  const isCurrentRedBall = props.gameInfo?.currentUserIndex == 0;
-  const fieldRef = useRef<HTMLDivElement>(null);
+const moveNames = ['Rock', 'Paper', 'Scissors', 'Lizard', 'Spock'];
 
-  const [fieldHeight, setFieldHeight] = useState<number | 'auto'>(0);
+const GameView: React.FC<IGameViewProps> = ({ gameInfo, currentPlayer, onMoveSelected, loading }) => {
+  const [selectedMove, setSelectedMove] = useState<number | null>(null);
+  const [opponentMove, setOpponentMove] = useState<string>('Waiting...');
+  const [roundResult, setRoundResult] = useState<string>('');
+
+  const isCurrentPlayerTurn = !gameInfo.player1Move || !gameInfo.player2Move;
+  const isPlayer1 = currentPlayer.equals(gameInfo.player1);
+
   useEffect(() => {
-    const resizeField = () => {
-      if (window.innerWidth <= 1024) {
-        setFieldHeight('auto');
+    if (gameInfo.player1Move && gameInfo.player2Move) {
+      const move1 = gameInfo.player1Move.move.toString();
+      const move2 = gameInfo.player2Move.move.toString();
+      setOpponentMove(moveNames[isPlayer1 ? parseInt(move2) : parseInt(move1)]);
+      
+      // Determine round winner
+      const winner = determineWinner(parseInt(move1), parseInt(move2));
+      if (winner === 0) {
+        setRoundResult("It's a tie!");
+      } else if ((winner === 1 && isPlayer1) || (winner === 2 && !isPlayer1)) {
+        setRoundResult("You win this round!");
       } else {
-        fieldRef.current && setFieldHeight(fieldRef.current.offsetWidth);
+        setRoundResult("You lose this round!");
       }
-      // fieldRef.current && setFieldHeight(fieldRef.current.offsetWidth);
-    };
-    resizeField();
-    addEventListener('resize', resizeField);
-    return () => {
-      removeEventListener('resize', resizeField);
-    };
-  }, []);
+    }
+  }, [gameInfo.player1Move, gameInfo.player2Move, isPlayer1]);
+
+  const handleMoveClick = (move: number) => {
+    if (!loading && isCurrentPlayerTurn) {
+      setSelectedMove(move);
+      onMoveSelected(move);
+    }
+  };
+
+  const determineWinner = (move1: number, move2: number): number => {
+    if (move1 === move2) return 0;
+    if (
+      (move1 === 0 && (move2 === 2 || move2 === 3)) ||
+      (move1 === 1 && (move2 === 0 || move2 === 4)) ||
+      (move1 === 2 && (move2 === 1 || move2 === 3)) ||
+      (move1 === 3 && (move2 === 1 || move2 === 4)) ||
+      (move1 === 4 && (move2 === 0 || move2 === 2))
+    ) {
+      return 1;
+    }
+    return 2;
+  };
 
   return (
-    <div
-      ref={fieldRef}
-      className={`mx-auto grid grid-cols-15 gap-0 rounded-[5px] bg-foreground/50 pr-1 lg:pr-1 ${
-        fieldActive
-          ? 'border-[3px] border-left-accent p-px lg:border-4'
-          : 'p-px lg:p-1'
-      }`}
-      style={{ height: fieldHeight }}
-    >
-      {[...Array(15).keys()].map((i) =>
-        [...Array(15).keys()].map((j) => (
-          <div
-            key={`${i}_${j}`}
-            className={`
-              bg-bg-dark ${
-                highlightCells ? 'hover:border-bg-dark/50' : ''
-              } m-px h-auto max-w-full border border-foreground/50 bg-[length:15px_15px] bg-center bg-no-repeat p-[10px] lg:bg-[length:auto_auto] lg:p-4
-              ${
-                displayBall(i, j) &&
-                (isCurrentRedBall
-                  ? "hover:bg-[url('/ball_green.png')]"
-                  : "hover:bg-[url('/ball_blue.png')]")
-              }
-              ${
-                props.gameInfo && +props.gameInfo.field.value[j][i] == 1
-                  ? "bg-[url('/ball_green.png')]"
-                  : ''
-              }
-              ${
-                props.gameInfo && +props.gameInfo.field.value[j][i] == 2
-                  ? "bg-[url('/ball_blue.png')]"
-                  : ''
-              }
-              ${
-                isLoadingBall(i, j) &&
-                (isCurrentRedBall
-                  ? "bg-opacity-50 bg-[url('/ball_green.png')]"
-                  : "bg-opacity-50 bg-[url('/ball_blue.png')]")
-              }
-            `}
-            style={{
-              imageRendering: 'pixelated',
-            }}
-            id={`${i}_${j}`}
-            onClick={() => props.onCellClicked(i, j)}
-          ></div>
-        ))
+    <div className="flex flex-col items-center justify-center bg-gray-800 p-6 rounded-lg">
+      <div className="text-3xl font-bold text-white mb-6">PowerClash</div>
+      <div className="flex justify-between w-full mb-6">
+        <div className="text-xl text-cyan-400">
+          Your Move: {selectedMove !== null ? moveNames[selectedMove] : 'Choose'}
+        </div>
+        <div className="text-xl text-cyan-400">
+          Opponent's Move: {opponentMove}
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-4 mb-6">
+        {moveNames.map((move, index) => (
+          <button
+            key={move}
+            onClick={() => handleMoveClick(index)}
+            disabled={loading || !isCurrentPlayerTurn || selectedMove !== null}
+            className={`py-2 px-4 rounded ${
+              selectedMove === index
+                ? 'bg-green-500 text-white'
+                : 'bg-blue-500 hover:bg-blue-600 text-white'
+            } ${(loading || !isCurrentPlayerTurn || selectedMove !== null) && 'opacity-50 cursor-not-allowed'}`}
+          >
+            {move}
+          </button>
+        ))}
+      </div>
+      <div className="text-xl text-white mb-4">
+        Score: You {isPlayer1 ? gameInfo.player1Wins : gameInfo.player2Wins} - {isPlayer1 ? gameInfo.player2Wins : gameInfo.player1Wins} Opponent
+      </div>
+      {roundResult && <div className="text-2xl text-yellow-400 mb-4">{roundResult}</div>}
+      {gameInfo.gameWinner && (
+        <div className="text-3xl font-bold text-green-400">
+          {gameInfo.gameWinner.equals(currentPlayer) ? 'You win the game!' : 'You lose the game!'}
+        </div>
       )}
+      {loading && <div className="text-xl text-white">Processing move...</div>}
     </div>
   );
 };
+
+export default GameView;
