@@ -220,33 +220,41 @@ const pc: React.FC = () => {
     }
   };  
 
-  const fetchGameState = async () => {
-    if (!query || !matchQueue.activeGameId) return;
-    const PowerClash = client.runtime.resolve('PowerClash');
-    try {
-      const gameState = await PowerClash.getGameState.get(UInt64.from(matchQueue.activeGameId));
-      console.log("gameState: ", gameState)
-      if (gameState) {
-        if (gameState.player1Move.move.toString() !== '-1' && gameState.player2Move.move.toString() !== '-1') {
-          setOpponentMove(moves[Number(gameState.player2Move.move.toString())]);
-          setGameState(GameState.RoundEnd);
-        } else if (commitment && !gameState.player1Move.move.equals(Field(-1))) {
-          setGameState(GameState.Reveal);
-        }
-
-        if (!gameState.gameWinner.equals(PublicKey.empty())) {
-          setGameWinner(gameState.gameWinner);
-          setGameState(GameState.GameEnd);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching game state:', error);
-      notificationStore.create({
-        type: 'error',
-        message: 'Failed to fetch game state. Please try again.',
-      });
-    }
+  type GameStateType = {
+    player1Move: { move: Field };
+    player2Move: { move: Field };
+    gameWinner: PublicKey;
   };
+  
+  const fetchGameState = async () => {
+      if (!query || !matchQueue.activeGameId) return;
+      const PowerClash = client.runtime.resolve('PowerClash');
+      try {
+        const gameState = await client.query.runtime.PowerClash.games.get(UInt64.from(matchQueue.activeGameId)) as GameStateType;
+        console.log('game game ', gameState);
+        // const gameState = await PowerClash.get(UInt64.from(matchQueue.activeGameId));
+        console.log("gameState: ", gameState)
+        if (gameState) {
+          if (gameState.player1Move.move !== Field(-1) && gameState.player2Move.move !== Field(-1)) {
+            setOpponentMove(moves[Number(gameState.player2Move.move.toString())]);
+            setGameState(GameState.RoundEnd);
+          } else if (commitment && !gameState.player1Move.move.equals(Field(-1))) {
+            setGameState(GameState.Reveal);
+          }
+  
+          if (!gameState.gameWinner.equals(PublicKey.empty())) {
+            setGameWinner(gameState.gameWinner);
+            setGameState(GameState.GameEnd);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching game state:', error);
+        notificationStore.create({
+          type: 'error',
+          message: 'Failed to fetch game state. Please try again.',
+        });
+      }
+    };
 
   useEffect(() => {
     fetchGameState();
