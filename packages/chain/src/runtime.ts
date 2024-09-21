@@ -7,17 +7,20 @@ import { ModulesConfig } from '@proto-kit/common';
 import { CheckersLogic } from './checkers';
 import { GuessGame } from './number_guessing';
 import { SlotMachine } from './TokenTwist';
+import { PowerClash } from './PowerClash';
 
 const modules = {
   Balances,
-  SlotMachine
+  SlotMachine,
+  PowerClash,
 };
 
 const config: ModulesConfig<typeof modules> = {
   Balances: {
     totalSupply: UInt64.from(10000),
   },
-  SlotMachine: {}
+  SlotMachine: {},
+  PowerClash: {},
 };
 
 export default {
