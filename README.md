@@ -1,8 +1,8 @@
-# Token Twist
+# Power Clash
+![rmn](https://github.com/user-attachments/assets/f681d997-f0ac-4bcb-9acf-348ecbd11342)
 
-<p align="center">
-  <img src = "https://github.com/user-attachments/assets/91d51801-9852-4e50-97db-b8b62adb60c9" />
-</p>
+
+
 
 
 ### Setup
@@ -22,5 +22,13 @@ pnpm install
 
 pnpm env:inmemory dev
 ```
+
+
+
+# Token Twist
+
+<p align="center">
+  <img src = "https://github.com/user-attachments/assets/91d51801-9852-4e50-97db-b8b62adb60c9" />
+</p>
 
 
