@@ -1,4 +1,5 @@
 # Power Clash
+won 3rd prize in ethSingapore on Mina Protocol (zknoid)
 ![rmn](https://github.com/user-attachments/assets/f681d997-f0ac-4bcb-9acf-348ecbd11342)
 
 
